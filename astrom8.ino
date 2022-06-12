@@ -29,13 +29,17 @@ WebServer server(80);
 void setup() {
   Serial.begin(115200);
 
+  // setup PWM port
+  ledcSetup(1, 10000, 8); // 12 kHz PWM, 8-bit resolution
+  ledcAttachPin(26, 1);
+  ledcSetup(0, 5000, 8); // 12 kHz PWM, 8-bit resolution
+  ledcAttachPin(LED_BUILTIN, 0);
+  
   // setup servo
   ESP32PWM::allocateTimer(0);
   ESP32PWM::allocateTimer(1);
   ESP32PWM::allocateTimer(2);
   ESP32PWM::allocateTimer(3);
-//  mainServo.setPeriodHertz(50);    // standard 50 hz servo
-//  mainServo.attach(23, servo_min_pulse, servo_max_pulse);
   mainServo.attach(23, servo_min_pulse, servo_max_pulse);
 
   Serial.println("servo attached");
@@ -48,6 +52,7 @@ void setup() {
 
   server.on("/", handle_OnConnect);
   server.on(UriBraces("/cover/{}"), handle_OnCover);
+  server.on(UriBraces("/pwm/{}"), handle_OnPWM);
   server.onNotFound(handle_NotFound);
 
   server.begin();
@@ -75,7 +80,20 @@ void handle_OnCover() {
     currentAngle = angle;
   }
 
-  server.send(200, "text/plain",  "cover angle: '" + angleText + "'");
+  server.send(200, "text/plain",  "cover angle: " + angleText);
+}
+
+
+void handle_OnPWM() {
+  String pwmText = server.pathArg(0);
+  int pwm = pwmText.toInt();
+
+  // FIXME: sanity check
+  ledcWrite(0, pwm);
+  ledcWrite(1, pwm);
+  Serial.print("pwm target: ");
+  Serial.println(pwmText);
+  server.send(200, "text/plain",  "pwm value: " + pwmText);
 }
 
 void handle_NotFound() {
@@ -87,18 +105,6 @@ String SendHTML() {
 }
 
 void servoAngle(int angle) {
-//  int pulse_width_us;
-//  float temp_p;
-//  //transform angle to pulse width
-//  temp_p = ((angle + 45) * 7.407) + 500; //   2000/270 = 7.407
-//  pulse_width_us = int(temp_p);
-//
-//  mainServo.writeMicroseconds(pulse_width_us);
-//
-//  Serial.print("°   ");
-//  Serial.print("pulse_width:");
-//  Serial.print(pulse_width_us);
-//  Serial.println("uS");
   mainServo.easeTo(angle, 40);
   Serial.print("angle target: ");
   Serial.print(angle);
