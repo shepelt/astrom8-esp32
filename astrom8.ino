@@ -6,7 +6,16 @@
 #include <ServoEasing.hpp>
 #include "html.h"
 
-//Servo mainServo;
+#include <esp32DHT.h>
+#define ENVSENSOR_VCC 12
+#define ENVSENSOR_IN 32
+
+DHT11 sensor;
+float temp;
+float humidity;
+bool tempAvailable = false;
+unsigned long tempTime;
+
 ServoEasing  mainServo;
 
 int servo_min_pulse = 500;
@@ -37,6 +46,24 @@ unsigned long startTime;
 
 void setup() {
   Serial.begin(115200);
+
+  // env sensor
+  // authorize power
+  pinMode(ENVSENSOR_VCC, OUTPUT);
+  digitalWrite(ENVSENSOR_VCC, HIGH);
+  // initialize sensor
+  sensor.setup(ENVSENSOR_IN);
+  sensor.onData([](float newHumid, float newTemp) {
+    temp = newTemp;
+    humidity = newHumid;
+    tempTime = millis();
+    tempAvailable = true;
+    Serial.printf("Temp: %.1f°C\nHumid: %.1f%%\n", newTemp, newHumid);
+  });
+  sensor.onError([](uint8_t error) {
+    tempAvailable = false;
+    Serial.printf("Error: %d-%s\n", error, sensor.getError());
+  });
 
   // setup PWM port
   for (int i = 0; i < NUM_PORTS; i++) {
@@ -86,11 +113,21 @@ void setup() {
     handlePWM(request);
   });
 
+  server.on("/temp", HTTP_GET, [](AsyncWebServerRequest * request) {
+    handleTemp(request);
+  });
+
   server.begin();
   Serial.println("HTTP server started");
 }
 void loop() {
-  //  server.handleClient();
+  // read sensor value
+  static uint32_t lastMillis = 0;
+  if (millis() - lastMillis > 10000) {
+    lastMillis = millis();
+    sensor.read();
+    Serial.print("Read DHT...\n");
+  }
 }
 
 // Replaces placeholder with LED state value
@@ -98,6 +135,21 @@ String processor(const String& var) {
   Serial.println(var);
   return String();
 }
+
+void handleTemp(AsyncWebServerRequest *request) {
+  if (!tempAvailable) {
+    request->send(503, "text/plain", "Environmental data not available");
+    return;
+  }
+
+  String elapsed = String(millis() - tempTime);
+
+  String tempText = String(temp, 1);
+  String humidText = String(humidity, 1);
+
+  request->send(200, "text/plain", "Temp: " + tempText + " Humidity: " + humidText + " " + elapsed + "ms ago");
+}
+
 
 void handleCover(AsyncWebServerRequest *request) {
   if (coverMovementInProgress) {
