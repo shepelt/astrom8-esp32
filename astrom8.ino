@@ -1,8 +1,6 @@
 #include <WiFi.h>
-//#include <WebServer.h>
 #include <ESPAsyncWebServer.h>
 #include <SPIFFS.h>
-//#include "uri/UriBraces.h"
 
 #include <ESP32Servo.h>
 #include <ServoEasing.hpp>
@@ -13,9 +11,13 @@ ServoEasing  mainServo;
 
 int servo_min_pulse = 500;
 int servo_max_pulse = 2500;
-int cover_top = 170;
+int cover_top = 160;
 int cover_bottom = 10;
-int currentAngle = cover_top;
+int timeout = 1000 * 30; // 30 seconds
+
+#define NUM_PORTS  3
+int dcPorts[] = {19, 21, 4};
+int pwmChannels[] = {2, 3, 4};
 
 // TODO: use eeprom for configuration storage
 // TODO: basic HTML UI
@@ -31,15 +33,19 @@ IPAddress subnet(255, 255, 255, 0);
 
 AsyncWebServer server(80);
 bool coverMovementInProgress = false;
+unsigned long startTime;
 
 void setup() {
   Serial.begin(115200);
 
   // setup PWM port
-  ledcSetup(2, 5000, 8);
-  ledcAttachPin(26, 2);
-  ledcSetup(3, 5000, 8);
-  ledcAttachPin(LED_BUILTIN, 3);
+  for (int i = 0; i < NUM_PORTS; i++) {
+    ledcSetup(pwmChannels[i], 5000, 8);
+    ledcAttachPin(dcPorts[i], pwmChannels[i]);
+  }
+
+  ledcSetup(5, 5000, 8);
+  ledcAttachPin(LED_BUILTIN, 5);
 
   // setup servo
   ESP32PWM::allocateTimer(0);
@@ -95,13 +101,19 @@ String processor(const String& var) {
 
 void handleCover(AsyncWebServerRequest *request) {
   if (coverMovementInProgress) {
-    request->send(409, "text/plain", "Cover movement already in progress");
-    return;
+    unsigned long elapsedTime = millis() - startTime;
+    if (elapsedTime < timeout) {
+      request->send(409, "text/plain", "Cover movement already in progress");
+      return;
+    } else {
+      // ignore ongoing movement since timeout
+      mainServo.stop();
+    }
   }
 
   // block other requests
   coverMovementInProgress = true;
-  // FIXME: deadlock handler (possibly using timer?)
+  startTime = millis();
 
   String angleText;
   if (request->hasParam("angle")) {
@@ -111,17 +123,15 @@ void handleCover(AsyncWebServerRequest *request) {
     return;
   }
   int angle = angleText.toInt();
-  if (angle == 0) {
-    request->send(400, "text/plain", "Invalid request");
+  if (angle < cover_bottom || angle > cover_top) {
+    request->send(400, "text/plain", "Invalid angle request");
     return;
   }
 
   Serial.print("starting servo movement to ");
   Serial.println(angle);
   Serial.flush();
-  mainServo.startEaseTo(angle, 15, START_UPDATE_BY_INTERRUPT);
-
-  currentAngle = angle;
+  mainServo.startEaseTo(angle, 20, START_UPDATE_BY_INTERRUPT);
 
   request->send(200, "text/plain", "cover movement started");
 }
@@ -129,17 +139,45 @@ void handleCover(AsyncWebServerRequest *request) {
 
 void handlePWM(AsyncWebServerRequest *request) {
   String pwmText;
+  String portText;
   if (request->hasParam("duty")) {
     pwmText = request->getParam("duty")->value();
   } else {
     request->send(400, "text/plain", "Invalid request");
     return;
   }
-  int pwm = pwmText.toInt();
 
-  // FIXME: sanity check
-  ledcWrite(2, pwm);
-  ledcWrite(3, pwm);
+  if (request->hasParam("port")) {
+    portText = request->getParam("port")->value();
+  } else {
+    request->send(400, "text/plain", "Invalid request");
+    return;
+  }
+
+  int pwm = pwmText.toInt();
+  int port = portText.toInt();
+
+  if (pwm < 0 || pwm > 255) {
+    request->send(400, "text/plain", "Invalid request - duty value");
+    return;
+  }
+
+
+  if (port != 0 && port != 1 && port != 2) {
+    request->send(400, "text/plain", "Invalid request - pwm port");
+    return;
+  }
+
+  int channel = pwmChannels[port];
+  ledcWrite(5, pwm); // FIXME: built in LED (for debugging)
+  ledcWrite(channel, pwm);
+
+  Serial.print("pwm port: ");
+  Serial.println(portText);
+  Serial.print("pwm channel: ");
+  Serial.println(channel);
+  Serial.print("gpio: ");
+  Serial.println(dcPorts[port]);
   Serial.print("pwm target: ");
   Serial.println(pwmText);
   request->send(200, "text/plain", "pwm value: " + pwmText);
@@ -147,7 +185,10 @@ void handlePWM(AsyncWebServerRequest *request) {
 
 void servoTargetPositionReachedHandler(ServoEasing *aServoEasingInstance) {
   // servoangle request complete
-  Serial.println("servo movement complete");
+  unsigned long elapsedTime = millis() - startTime;
+  Serial.print("servo movement complete in ");
+  Serial.print(elapsedTime);
+  Serial.println(" ms");
   Serial.flush();
   coverMovementInProgress = false;
 }
