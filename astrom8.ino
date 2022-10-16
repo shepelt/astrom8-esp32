@@ -31,8 +31,9 @@ ServoEasing  mainServo;
 
 int servo_min_pulse = 500;
 int servo_max_pulse = 2500;
-int cover_top = 170;
+int cover_top = 165;
 int cover_bottom = 10;
+int coverTo = cover_top;
 int timeout = 1000 * 30; // 30 seconds
 
 #define NUM_PORTS  3
@@ -189,7 +190,7 @@ void loop() {
 
 
     Serial.println("<Cover>");
-    Serial.print("Angle      :   "); Serial.print(mainServo.read()); Serial.println(" degrees");
+    Serial.print("Angle      :   "); Serial.print(coverTo); Serial.println(" degrees");
 
     Serial.println("<PWM>");
     Serial.print("PWM 1      :   "); Serial.print(pwmValues[0]); Serial.println(" / 255");
@@ -238,7 +239,7 @@ void handleStatus(AsyncWebServerRequest *request) {
   String pwm2 = String(pwmValues[1]);
   String pwm3 = String(pwmValues[2]);
 
-  request->send(200, "text/plain", "PWM: " + pwm1 + " " + pwm2 + " " + pwm3 + "\n" + "Cover: " + mainServo.read());
+  request->send(200, "text/plain", "PWM: " + pwm1 + " " + pwm2 + " " + pwm3 + "\n" + "Cover: " + coverTo);
 }
 
 
@@ -287,6 +288,7 @@ void handleCover(AsyncWebServerRequest *request) {
     return;
   }
 
+  coverTo = angle;
   Serial.print("starting servo movement to ");
   Serial.println(angle);
   Serial.flush();
