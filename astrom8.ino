@@ -1,3 +1,6 @@
+#include <Preferences.h>
+Preferences prefs;
+
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <SPIFFS.h>
@@ -28,13 +31,14 @@ ServoEasing  mainServo;
 
 int servo_min_pulse = 500;
 int servo_max_pulse = 2500;
-int cover_top = 160;
+int cover_top = 170;
 int cover_bottom = 10;
 int timeout = 1000 * 30; // 30 seconds
 
 #define NUM_PORTS  3
 int dcPorts[] = {19, 21, 4};
 int pwmChannels[] = {2, 3, 4};
+int pwmValues[] = {0, 0, 0};
 
 // TODO: use eeprom for configuration storage
 // TODO: basic HTML UI
@@ -54,6 +58,10 @@ unsigned long startTime;
 
 void setup() {
   Serial.begin(115200);
+
+  // load configuration
+  processConfig();
+
 
   // env sensor
   // authorize power
@@ -87,6 +95,14 @@ void setup() {
 
   ledcSetup(5, 5000, 8);
   ledcAttachPin(LED_BUILTIN, 5);
+
+
+  // initialize PWM values from config
+  for (int i = 0; i < NUM_PORTS; i++) {
+    int channel = pwmChannels[i];
+    int pwm = pwmValues[i];
+    ledcWrite(channel, pwm);
+  }
 
   // setup servo
   ESP32PWM::allocateTimer(0);
@@ -131,14 +147,60 @@ void setup() {
     handleTemp(request);
   });
 
+  server.on("/status", HTTP_GET, [](AsyncWebServerRequest * request) {
+    handleStatus(request);
+  });
+
   server.begin();
   Serial.println("HTTP server started");
 }
+
+void processConfig() {
+  Serial.println("Loading config");
+  prefs.begin("astrom8");
+
+  size_t pwmLen = prefs.getBytesLength("pwm");
+  char buffer[pwmLen]; // prepare a buffer for the data
+  prefs.getBytes("pwm", buffer, pwmLen);
+
+  if (pwmLen % sizeof(pwmValues)) {
+    // invalid size
+    return;
+  }
+
+  int* pwmValuesLoaded = (int*) buffer;
+  for (int i = 0; i < NUM_PORTS; i++) {
+    int pwm = pwmValuesLoaded[i];
+    if (pwm < 0 || pwm > 255) {
+      // set to 0
+      pwm = 0;
+    }
+    pwmValues[i] = pwm;
+
+    Serial.print("PWM "); Serial.println(pwm);
+  }
+}
+
 void loop() {
   // read sensor value
   static uint32_t lastMillis = 0;
   if (millis() - lastMillis > 10000) {
     lastMillis = millis();
+
+
+    Serial.println("<Cover>");
+    Serial.print("Angle      :   "); Serial.print(mainServo.read()); Serial.println(" degrees");
+
+    Serial.println("<PWM>");
+    Serial.print("PWM 1      :   "); Serial.print(pwmValues[0]); Serial.println(" / 255");
+    Serial.print("PWM 2      :   "); Serial.print(pwmValues[1]); Serial.println(" / 255");
+    Serial.print("PWM 3      :   "); Serial.print(pwmValues[2]); Serial.println(" / 255");
+
+
+
+
+    Serial.println("<Environment>");
+
     sensor.read();
 
     // INA219
@@ -154,6 +216,7 @@ void loop() {
     power_mW = ina219.getPower_mW();
     loadvoltage = busvoltage + (shuntvoltage / 1000);
 
+    Serial.println("<Power>");
     Serial.print("Bus Voltage:   "); Serial.print(busvoltage); Serial.println(" V");
     Serial.print("Shunt Voltage: "); Serial.print(shuntvoltage); Serial.println(" mV");
     Serial.print("Load Voltage:  "); Serial.print(loadvoltage); Serial.println(" V");
@@ -169,6 +232,16 @@ String processor(const String& var) {
   Serial.println(var);
   return String();
 }
+
+void handleStatus(AsyncWebServerRequest *request) {
+  String pwm1 = String(pwmValues[0]);
+  String pwm2 = String(pwmValues[1]);
+  String pwm3 = String(pwmValues[2]);
+
+  request->send(200, "text/plain", "PWM: " + pwm1 + " " + pwm2 + " " + pwm3 + "\n" + "Cover: " + mainServo.read());
+}
+
+
 
 void handleTemp(AsyncWebServerRequest *request) {
   if (!tempAvailable) {
@@ -257,6 +330,11 @@ void handlePWM(AsyncWebServerRequest *request) {
   int channel = pwmChannels[port];
   ledcWrite(5, pwm); // FIXME: built in LED (for debugging)
   ledcWrite(channel, pwm);
+  pwmValues[port] = pwm;
+  // save pwm values
+  prefs.putBytes("pwm", pwmValues, sizeof(pwmValues));
+
+
 
   Serial.print("pwm port: ");
   Serial.println(portText);
