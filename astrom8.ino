@@ -26,6 +26,7 @@ float temp;
 float humidity;
 bool tempAvailable = false;
 unsigned long tempTime;
+unsigned long upTime;
 
 ServoEasing  mainServo;
 
@@ -59,6 +60,8 @@ unsigned long startTime;
 
 void setup() {
   Serial.begin(115200);
+
+  startTime = millis();
 
   // load configuration
   processConfig();
@@ -182,6 +185,23 @@ void processConfig() {
   }
 }
 
+
+// INA219
+float shuntvoltage = 0;
+float busvoltage = 0;
+float current_mA = 0;
+float loadvoltage = 0;
+float power_mW = 0;
+
+void readPower() {
+  shuntvoltage = ina219.getShuntVoltage_mV();
+  busvoltage = ina219.getBusVoltage_V();
+  current_mA = abs(ina219.getCurrent_mA());
+  power_mW = ina219.getPower_mW();
+  loadvoltage = busvoltage + (shuntvoltage / 1000);
+}
+
+
 void loop() {
   // read sensor value
   static uint32_t lastMillis = 0;
@@ -204,18 +224,8 @@ void loop() {
 
     sensor.read();
 
-    // INA219
-    float shuntvoltage = 0;
-    float busvoltage = 0;
-    float current_mA = 0;
-    float loadvoltage = 0;
-    float power_mW = 0;
+    readPower();
 
-    shuntvoltage = ina219.getShuntVoltage_mV();
-    busvoltage = ina219.getBusVoltage_V();
-    current_mA = abs(ina219.getCurrent_mA());
-    power_mW = ina219.getPower_mW();
-    loadvoltage = busvoltage + (shuntvoltage / 1000);
 
     Serial.println("<Power>");
     Serial.print("Bus Voltage:   "); Serial.print(busvoltage); Serial.println(" V");
@@ -239,7 +249,11 @@ void handleStatus(AsyncWebServerRequest *request) {
   String pwm2 = String(pwmValues[1]);
   String pwm3 = String(pwmValues[2]);
 
-  request->send(200, "text/plain", "PWM: " + pwm1 + " " + pwm2 + " " + pwm3 + "\n" + "Cover: " + coverTo);
+  String elapsed = String(millis() - upTime);
+  String voltage = String(loadvoltage);
+  String mw = String(power_mW);
+
+  request->send(200, "text/plain", "PWM: " + pwm1 + " " + pwm2 + " " + pwm3 + "\n" + "Cover: " + coverTo + "\n" + "Uptime: " + elapsed + "\n" + "Power: " + voltage + "v " + mw + "mw");
 }
 
 
