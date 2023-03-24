@@ -1,28 +1,28 @@
 #include <WiFi.h>
-//#include <WebServer.h>
 #include <ESPAsyncWebServer.h>
 #include <SPIFFS.h>
-//#include "uri/UriBraces.h"
 
 #include <ESP32Servo.h>
 #include <ServoEasing.hpp>
 #include "html.h"
 
 //Servo mainServo;
-ServoEasing  mainServo;
+ServoEasing mainServo;
 
 int servo_min_pulse = 500;
 int servo_max_pulse = 2500;
 int cover_top = 170;
 int cover_bottom = 10;
 int currentAngle = cover_top;
-
-// TODO: use eeprom for configuration storage
-// TODO: basic HTML UI
+int timeout = 1000 * 30;  // 30 seconds
+unsigned long startTime;
 
 /* Put your SSID & Password */
-const char* ssid = "rifelcon";  // Enter SSID here
-const char* password = "rifelcon123";  //Enter Password here
+const char *ssid = "rifelcon";         // Enter SSID here
+const char *password = "rifelcon123";  //Enter Password here
+const char *remote_ssid = "roofwifi_hidden";
+const char *remote_password = NULL;
+
 
 /* Put IP Address details */
 IPAddress local_ip(192, 168, 1, 1);
@@ -34,6 +34,7 @@ bool coverMovementInProgress = false;
 
 void setup() {
   Serial.begin(115200);
+  startTime = millis();
 
   // setup PWM port
   ledcSetup(2, 5000, 8);
@@ -62,46 +63,49 @@ void setup() {
   WiFi.softAPConfig(local_ip, gateway, subnet);
   delay(100);
 
-  // Route for root / web page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/index.html", String(), false, processor);
+  // Route for root /00 web page
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+      request->send(200, "text/plain", "Astrom8 mini HTTP server");
   });
 
-  // Route to load style.css file
-  server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest * request) {
-    request->send(SPIFFS, "/style.css", "text/css");
-  });
-
-  server.on("/cover", HTTP_GET, [](AsyncWebServerRequest * request) {
+  server.on("/cover", HTTP_GET, [](AsyncWebServerRequest *request) {
     handleCover(request);
   });
 
-  server.on("/pwm", HTTP_GET, [](AsyncWebServerRequest * request) {
+  server.on("/pwm", HTTP_GET, [](AsyncWebServerRequest *request) {
     handlePWM(request);
   });
 
   server.begin();
   Serial.println("HTTP server started");
 }
+
+
 void loop() {
-  //  server.handleClient();
+
 }
 
 // Replaces placeholder with LED state value
-String processor(const String& var) {
+String processor(const String &var) {
   Serial.println(var);
   return String();
 }
 
 void handleCover(AsyncWebServerRequest *request) {
   if (coverMovementInProgress) {
-    request->send(409, "text/plain", "Cover movement already in progress");
-    return;
+    unsigned long elapsedTime = millis() - startTime;
+    if (elapsedTime < timeout) {
+      request->send(409, "text/plain", "Cover movement already in progress");
+      return;
+    } else {
+      // ignore ongoing movement since timeout
+      mainServo.stop();
+    }
   }
 
   // block other requests
   coverMovementInProgress = true;
-  // FIXME: deadlock handler (possibly using timer?)
+  startTime = millis();
 
   String angleText;
   if (request->hasParam("angle")) {
@@ -147,7 +151,10 @@ void handlePWM(AsyncWebServerRequest *request) {
 
 void servoTargetPositionReachedHandler(ServoEasing *aServoEasingInstance) {
   // servoangle request complete
-  Serial.println("servo movement complete");
+  unsigned long elapsedTime = millis() - startTime;
+  Serial.print("servo movement complete in ");
+  Serial.print(elapsedTime);
+  Serial.println(" ms");
   Serial.flush();
   coverMovementInProgress = false;
 }
